@@ -16,9 +16,9 @@ parser.add_argument(
 parser.add_argument(
     '--tau',
     type=float,
-    default=1.00,
+    default=0.95,
     metavar='T',
-    help='parameter for GAE (default: 1.00)')
+    help='parameter for GAE (default: 0.95)')
 parser.add_argument(
     '--seed',
     type=int,
@@ -28,7 +28,7 @@ parser.add_argument(
 parser.add_argument(
     '--workers',
     type=int,
-    default=4,
+    default=8,
     metavar='W',
     help='how many training processes to use (default: 32)')
 parser.add_argument(
@@ -94,7 +94,7 @@ parser.add_argument(
     help='GPUs to use [-1 CPU only] (default: -1)')
 parser.add_argument(
     '--amsgrad',
-    default=True,
+    default=False,
     metavar='AM',
     help='Adam optimizer amsgrad parameter')
 parser.add_argument(

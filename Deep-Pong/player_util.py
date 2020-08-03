@@ -9,15 +9,15 @@ class Agent(object):
         self.model = model
         self.env = env
         self.state = state
-        self.hx = None
-        self.cx = None
+        self.hx = Variable(torch.zeros(args.workers, 512).cuda())
+        self.cx = Variable(torch.zeros(args.workers, 512).cuda())
         self.eps_len = 0
         self.args = args
         self.values = []
         self.log_probs = []
         self.rewards = []
         self.entropies = []
-        self.done = True
+        self.done = [True,True,True,True, True,True,True,True]
         self.info = None
         self.reward = 0
         self.gpu_id = 0
@@ -34,7 +34,7 @@ class Agent(object):
     def action_train(self):
         #单步的action
         value, logit, (self.hx, self.cx) = self.model((Variable(
-            self.state.unsqueeze(0)), (self.hx, self.cx)))
+            self.state), (self.hx, self.cx)))
         #计算每次的概率和entropy(entropies)和entropy的sum,sum是每一步所有动作概率的熵值
         prob = F.softmax(logit, dim=1)
         log_prob = F.log_softmax(logit, dim=1)
@@ -50,11 +50,17 @@ class Agent(object):
         with torch.cuda.device(self.gpu_id):
             self.state = self.state.cuda()
         #reward (-1 to 1),gym env优化处理的结果
-        self.reward = max(min(self.reward, 1), -1)
+        for i in range(len(self.reward)):
+            self.reward[i] = max(min(self.reward[i], 1), -1)
+
+        self.reward = torch.from_numpy(self.reward).float()
+        with torch.cuda.device(self.gpu_id):
+            self.reward = self.reward.cuda()
+
         #保存list：critic.value action.log_probs acion.rewards
-        self.values.append(value)
         self.log_probs.append(log_prob)
         self.rewards.append(self.reward)
+        self.values.append(value)
         return self
 
     #test任务时，做测试不训练
@@ -75,7 +81,7 @@ class Agent(object):
                 self.cx = Variable(self.cx.data)
                 self.hx = Variable(self.hx.data)
             value, logit, (self.hx, self.cx) = self.model((Variable(
-                self.state.unsqueeze(0)), (self.hx, self.cx)))
+                self.state), (self.hx, self.cx)))
         prob = F.softmax(logit, dim=1)
         action = prob.max(1)[1].data.cpu().numpy()
         state, self.reward, self.done, self.info = self.env.step(action[0])

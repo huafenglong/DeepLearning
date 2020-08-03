@@ -5,57 +5,6 @@ import logging
 import torch
 import torch.multiprocessing as mp
 
-class TrafficLight:
-    """used by chief to allow workers to run or not"""
-
-    def __init__(self, val=True):
-        self.val = mp.Value("b", False)
-        self.lock = mp.Lock()
-
-    def get(self):
-        with self.lock:
-            return self.val.value
-
-    def switch(self):
-        with self.lock:
-            self.val.value = (not self.val.value)
-
-class Counter:
-    """enable the chief to access worker's total number of updates"""
-
-    def __init__(self, val=True):
-        self.val = mp.Value("i", 0)
-        self.lock = mp.Lock()
-
-    def get(self):
-        # used by chief
-        with self.lock:
-            return self.val.value
-
-    def increment(self):
-        # used by workers
-        with self.lock:
-            self.val.value += 1
-
-    def reset(self):
-        # used by chief
-        with self.lock:
-            self.val.value = 0
-
-class Shared_grad_buffers():
-    def __init__(self, model):
-        self.grads = {}
-        for name, p in model.named_parameters():
-            self.grads[name+'_grad'] = torch.ones(p.size()).share_memory_()
-
-    def add_gradient(self, model):
-        for name, p in model.named_parameters():
-            self.grads[name+'_grad'] += p.grad.data.cpu()
-
-    def reset(self):
-        for name,grad in self.grads.items():
-            self.grads[name].fill_(0)
-
 def setup_logger(logger_name, log_file, level=logging.INFO):
     l = logging.getLogger(logger_name)
     formatter = logging.Formatter('%(asctime)s : %(message)s')

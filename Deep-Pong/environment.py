@@ -8,6 +8,8 @@ from cv2 import resize
 #from skimage.transform import resize
 #from scipy.misc import imresize as resize
 import random
+import torch
+import torch.multiprocessing as mp
 
 
 def atari_env(env_id, env_conf, args, rank):
@@ -188,4 +190,69 @@ class MaxAndSkipEnv(gym.Wrapper):
         obs = self.env.reset(**kwargs)
         self._obs_buffer.append(obs)
         return obs
+
+def subproc_worker(worker_pipe, master_pipe, env):
+    """
+    每个独立的cpu——worker，根据master的信号运行环境
+    通过管道PIPE接收和发送命令，控制env的运行
+    """
+    #进入worker通道，只能work发送和接收
+    master_pipe.close()
+
+    while True:
+        cmd, data = worker_pipe.recv()
+        if cmd == 'reset':
+            obs = env.reset()
+            worker_pipe.send(obs)
+        elif cmd == 'step':
+            obs, reward, done, info = env.step(data)
+            if done:
+                obs = env.reset()
+            worker_pipe.send((obs, reward, done, info))
+        elif cmd == 'render':
+            worker_pipe.send(env.render())
+        else:
+            raise RuntimeError('Got unrecognized cmd %s' % cmd)
+
+
+class ParallelEnv:
+    def __init__(self, envs):
+        mp.set_start_method('spawn')
+        self.master_ends = []
+        self.waiting = False
+
+        for env in envs:
+            master_end, worker_end = mp.Pipe()
+            proc = mp.Process(target=subproc_worker, args=(worker_end, master_end, env))
+            proc.daemon = True
+            self.master_ends.append(master_end)
+            proc.start()
+            worker_end.close()
+
+
+    def step_async(self, actions):
+        for master_end, action in zip(self.master_ends, actions):
+            master_end.send(('step', action))
+        self.waiting = True
+
+    def step_wait(self):
+        results = [master_end.recv() for master_end in self.master_ends]
+        self.waiting = False
+        obs, rews, dones, infos = zip(*results)
+        return np.stack(obs), np.stack(rews), np.stack(dones), infos
+
+    def reset(self):
+        for master_end in self.master_ends:
+            master_end.send(('reset', None))
+        return np.stack([master_end.recv() for master_end in self.master_ends])
+
+    def step(self, actions):
+        self.step_async(actions)
+        return self.step_wait()
+
+    def get_images(self):
+        for master_end in self.master_ends:
+            master_end.send(('render', None))
+        return [master_end.recv() for master_end in self.master_ends]
+
 
