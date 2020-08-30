@@ -5,22 +5,25 @@ from torch.autograd import Variable
 
 
 class Agent(object):
-    def __init__(self, model, env, args, state):
-        self.model = model
+    def __init__(self, env, args):
+        self.model = None
         self.env = env
-        self.state = state
-        self.hx = Variable(torch.zeros(args.workers, 512).cuda())
-        self.cx = Variable(torch.zeros(args.workers, 512).cuda())
-        self.eps_len = 0
         self.args = args
+        self.gpu_id = 0
+
+        self.state = None
+        self.hx = None
+        self.cx = None
+
+        self.states = []
+        self.hxs = []
+        self.cxs = []
         self.values = []
         self.log_probs = []
+        self.actions = []
         self.rewards = []
-        self.entropies = []
-        self.done = [True,True,True,True, True,True,True,True]
-        self.info = None
-        self.reward = 0
-        self.gpu_id = 0
+        self.dones = []
+        self.infos = None
     '''
     通过状态，短期记忆，长期记忆输入到LSTM获取action的linear，critic的value,下一次的hx，cx
     取aciton.linear的softmax，logsoftmax获取动作的概率分布
@@ -32,69 +35,45 @@ class Agent(object):
         entropy = max 代表 0.5 0.5的分布
     '''
     def action_train(self):
-        #单步的action
-        value, logit, (self.hx, self.cx) = self.model((Variable(
-            self.state), (self.hx, self.cx)))
-        #计算每次的概率和entropy(entropies)和entropy的sum,sum是每一步所有动作概率的熵值
-        prob = F.softmax(logit, dim=1)
-        log_prob = F.log_softmax(logit, dim=1)
-        entropy = -(log_prob * prob).sum(1)
-        self.entropies.append(entropy)
-        #通过prob 采样对应的动作和动作logprob
-        action = prob.multinomial(1).data   #multinomial按权重取最大值，次数为1
-        log_prob = log_prob.gather(1, Variable(action))
+        #保存每一个step的输入状态
+        self.states.append(self.state)
+        self.hxs.append(self.hx.detach())
+        self.cxs.append(self.cx.detach())
+        #根据policy计算value和log，以及memory output
+        value, logit, (self.hx, self.cx) = self.model((self.state, (self.hx, self.cx)))
+        # 保存C model :values
+        self.values.append(value)
+        #根据logit,获得prob and action并保存
+        prob = F.softmax(logit, dim=1).detach()
+        action = prob.multinomial(1)  # multinomial按权重取最大值，次数为1
+        log_prob = torch.log(prob.gather(1, action))
+        self.actions.append(action)
+        self.log_probs.append(log_prob)
         #next setp
-        state, self.reward, self.done, self.info = self.env.step(
-            action.cpu().numpy())
-        self.state = torch.from_numpy(state).float()
+        state, reward, done, _ = self.env.step(action.cpu().numpy())
+
+        self.state = torch.tensor(state).float()
+        reward = [max(min(r, 1), -1) for r in reward]
+        reward = torch.tensor(reward).float()
+
         with torch.cuda.device(self.gpu_id):
             self.state = self.state.cuda()
-        #reward (-1 to 1),gym env优化处理的结果
-        for i in range(len(self.reward)):
-            self.reward[i] = max(min(self.reward[i], 1), -1)
+            reward = reward.cuda()
 
-        self.reward = torch.from_numpy(self.reward).float()
-        with torch.cuda.device(self.gpu_id):
-            self.reward = self.reward.cuda()
+        self.rewards.append(reward)
+        self.dones.append(list(done))
 
-        #保存list：critic.value action.log_probs acion.rewards
-        self.log_probs.append(log_prob)
-        self.rewards.append(self.reward)
-        self.values.append(value)
-        return self
-
-    #test任务时，做测试不训练
-    def action_test(self):
-        #可能时LSTM的需求，cx和hx
-        with torch.no_grad():
-            if self.done:
-                if self.gpu_id >= 0:
-                    with torch.cuda.device(self.gpu_id):
-                        self.cx = Variable(
-                            torch.zeros(1, 512).cuda())
-                        self.hx = Variable(
-                            torch.zeros(1, 512).cuda())
-                else:
-                    self.cx = Variable(torch.zeros(1, 512))
-                    self.hx = Variable(torch.zeros(1, 512))
-            else:
-                self.cx = Variable(self.cx.data)
-                self.hx = Variable(self.hx.data)
-            value, logit, (self.hx, self.cx) = self.model((Variable(
-                self.state), (self.hx, self.cx)))
-        prob = F.softmax(logit, dim=1)
-        action = prob.max(1)[1].data.cpu().numpy()
-        state, self.reward, self.done, self.info = self.env.step(action[0])
-        self.state = torch.from_numpy(state).float()
-        if self.gpu_id >= 0:
-            with torch.cuda.device(self.gpu_id):
-                self.state = self.state.cuda()
-        self.eps_len += 1
         return self
 
     def clear_actions(self):
+        self.states = []
+        self.hxs = []
+        self.cxs = []
         self.values = []
         self.log_probs = []
+        self.actions = []
         self.rewards = []
-        self.entropies = []
+        self.dones = []
+
         return self
+

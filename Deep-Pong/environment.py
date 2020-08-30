@@ -239,7 +239,8 @@ class ParallelEnv:
         results = [master_end.recv() for master_end in self.master_ends]
         self.waiting = False
         obs, rews, dones, infos = zip(*results)
-        return np.stack(obs), np.stack(rews), np.stack(dones), infos
+        #return np.stack(obs), np.stack(rews), np.stack(dones), infos
+        return obs, rews, dones, infos
 
     def reset(self):
         for master_end in self.master_ends:

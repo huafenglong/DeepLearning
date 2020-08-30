@@ -1,56 +1,80 @@
-from __future__ import division
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils import norm_col_init, weights_init
+
+class Flatten(nn.Module):
+    def forward(self, x):
+        return x.view(x.size(0), -1)
 
 
-class A3Clstm(torch.nn.Module):
-    def __init__(self, num_inputs, action_space):
-        super(A3Clstm, self).__init__()
-        self.conv1 = nn.Conv2d(num_inputs, 32, 5, stride=1, padding=2)
-        self.maxp1 = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(32, 32, 5, stride=1, padding=1)
-        self.maxp2 = nn.MaxPool2d(2, 2)
-        self.conv3 = nn.Conv2d(32, 64, 4, stride=1, padding=1)
-        self.maxp3 = nn.MaxPool2d(2, 2)
-        self.conv4 = nn.Conv2d(64, 64, 3, stride=1, padding=1)
-        self.maxp4 = nn.MaxPool2d(2, 2)
+class Policy(nn.Module):
+    def __init__(self, obs_shape, action_space):
+        super(Policy, self).__init__()
 
-        self.lstm = nn.LSTMCell(1024, 512)
-        num_outputs = action_space.n
-        self.critic_linear = nn.Linear(512, 1)
-        self.actor_linear = nn.Linear(512, num_outputs)
+        self.base = CNNBase(obs_shape[0])
 
-        self.apply(weights_init)
-        relu_gain = nn.init.calculate_gain('relu')
-        self.conv1.weight.data.mul_(relu_gain)
-        self.conv2.weight.data.mul_(relu_gain)
-        self.conv3.weight.data.mul_(relu_gain)
-        self.conv4.weight.data.mul_(relu_gain)
-        self.actor_linear.weight.data = norm_col_init(
-            self.actor_linear.weight.data, 0.01)
-        self.actor_linear.bias.data.fill_(0)
-        self.critic_linear.weight.data = norm_col_init(
-            self.critic_linear.weight.data, 1.0)
-        self.critic_linear.bias.data.fill_(0)
-
-        self.lstm.bias_ih.data.fill_(0)
-        self.lstm.bias_hh.data.fill_(0)
-
-        self.train()
+        if action_space.__class__.__name__ == "Discrete":
+            num_outputs = action_space.n
+            self.dist = Categorical(self.base.output_size, num_outputs)
+        else:
+            raise NotImplementedError
 
     def forward(self, inputs):
-        inputs, (hx, cx) = inputs
-        x = F.relu(self.maxp1(self.conv1(inputs)))
-        x = F.relu(self.maxp2(self.conv2(x)))
-        x = F.relu(self.maxp3(self.conv3(x)))
-        x = F.relu(self.maxp4(self.conv4(x)))
+        raise NotImplementedError
 
-        x = x.view(x.size(0), -1)
+    def act(self, inputs, deterministic=False):
+        value, actor_features = self.base(inputs)
+        dist = self.dist(actor_features)
 
-        hx, cx = self.lstm(x, (hx, cx))
+        if deterministic:
+            action = dist.mode()
+        else:
+            action = dist.sample()
 
-        x = hx
-        #action返回值没有做softmax处理，在action里面处理
-        return self.critic_linear(x), self.actor_linear(x), (hx, cx)
+        action_log_probs = dist.log_probs(action)
+
+        return value, action, action_log_probs
+
+    def get_value(self, inputs):
+        value, _ = self.base(inputs)
+        return value
+
+    def evaluate_actions(self, inputs, action):
+        value, actor_features = self.base(inputs)
+        dist = self.dist(actor_features)
+
+        action_log_probs = dist.log_probs(action)
+        dist_entropy = dist.entropy().mean()
+
+        return value, action_log_probs, dist_entropy
+
+class CNNBase(nn.Module):
+    def __init__(self, num_inputs, hidden_size=512):
+        super(CNNBase, self).__init__()
+
+        init_ = lambda m: init(m, nn.init.orthogonal_, lambda x: nn.init.
+                               constant_(x, 0), nn.init.calculate_gain('relu'))
+
+        self.main = nn.Sequential(
+            init_(nn.Conv2d(num_inputs, 32, 8, stride=4)), nn.ReLU(),
+            init_(nn.Conv2d(32, 64, 4, stride=2)), nn.ReLU(),
+            init_(nn.Conv2d(64, 32, 3, stride=1)), nn.ReLU(), Flatten(),
+            init_(nn.Linear(32 * 7 * 7, hidden_size)), nn.ReLU())
+
+        init_ = lambda m: init(m, nn.init.orthogonal_, lambda x: nn.init.
+                               constant_(x, 0))
+
+        self.critic_linear = init_(nn.Linear(hidden_size, 1))
+        self.__hidden_size = hidden_size
+        self.train()
+
+    @property
+    def output_size(self):
+        return self.__hidden_size
+
+    def forward(self, inputs):
+        x = self.main(inputs / 255.0)
+
+        return self.critic_linear(x), x
+

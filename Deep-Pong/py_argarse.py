@@ -28,7 +28,7 @@ parser.add_argument(
 parser.add_argument(
     '--workers',
     type=int,
-    default=8,
+    default= 1,
     metavar='W',
     help='how many training processes to use (default: 32)')
 parser.add_argument(
@@ -103,5 +103,17 @@ parser.add_argument(
     default=4,
     metavar='SR',
     help='frame skip rate (default: 4)')
+parser.add_argument(
+    '--clip_param',
+    type=float,
+    default=0.2,
+    metavar='CLIP',
+    help='clip_param')
+parser.add_argument(
+    '--num_ppo_train',
+    type=int,
+    default= 10,
+    metavar='num_ppo_train',
+    help='num_ppo_train')
 
 args = parser.parse_args()
